@@ -1054,6 +1054,77 @@ Example with RepeatGroupDTO for intervals:
   );
 
   // ══════════════════════════════════════════════════════════════════
+  // Body composition / weight
+  // ══════════════════════════════════════════════════════════════════
+
+  // ── upload-weight ──────────────────────────────────────────────────
+
+  server.tool(
+    "upload-weight",
+    "Record a weigh-in in Garmin Connect. Posts to weight-service/user-weight with both local (America/Toronto) and GMT timestamps in the format Garmin expects.",
+    {
+      weightKg: z
+        .number()
+        .positive()
+        .describe("Weight value (defaults to kg; use unitKey for lbs)"),
+      timestampIso: z
+        .string()
+        .describe(
+          "Measurement time as an ISO 8601 string with TZ offset, e.g. 2026-04-13T05:00:00-04:00"
+        ),
+      unitKey: z
+        .enum(["kg", "lbs"])
+        .default("kg")
+        .describe("Unit for the weight value"),
+    },
+    async ({ weightKg, timestampIso, unitKey }) => {
+      const client = getClient();
+
+      const dt = new Date(timestampIso);
+      if (isNaN(dt.getTime())) {
+        return errorResult(`Invalid ISO timestamp: ${timestampIso}`);
+      }
+
+      // Garmin wants both fields as "YYYY-MM-DDTHH:mm:ss.sss" with NO
+      // timezone suffix. dateTimestamp is the user's local wall-clock time,
+      // gmtTimestamp is UTC. Toronto is Rob's timezone; this tool is
+      // intentionally not TZ-agnostic.
+      const fmtInTz = (d: Date, timeZone: string): string => {
+        const parts = new Intl.DateTimeFormat("en-CA", {
+          timeZone,
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          hour12: false,
+          fractionalSecondDigits: 3,
+        }).formatToParts(d);
+        const get = (type: string) =>
+          parts.find((p) => p.type === type)?.value ?? "00";
+        // en-CA uses 24 as hour value at midnight in some Node versions; normalize.
+        const hour = get("hour") === "24" ? "00" : get("hour");
+        return `${get("year")}-${get("month")}-${get("day")}T${hour}:${get("minute")}:${get("second")}.${get("fractionalSecond")}`;
+      };
+
+      const dateTimestamp = fmtInTz(dt, "America/Toronto");
+      const gmtTimestamp = fmtInTz(dt, "UTC");
+
+      const payload = {
+        dateTimestamp,
+        gmtTimestamp,
+        unitKey,
+        sourceType: "MANUAL",
+        value: weightKg,
+      };
+
+      const data = await client.post("weight-service/user-weight", payload);
+      return jsonResult({ posted: payload, response: data });
+    }
+  );
+
+  // ══════════════════════════════════════════════════════════════════
   // Testing
   // ══════════════════════════════════════════════════════════════════
 
